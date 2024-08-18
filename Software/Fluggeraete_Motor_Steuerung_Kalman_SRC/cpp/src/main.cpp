@@ -9,6 +9,7 @@
 #include "Kalman.h"
 #include "Kalman_Initialize.h"
 #include "Kalman_Loop.h"
+#include "pid.h"
 
 #include "main.h"
 #include "stdio.h"
@@ -21,6 +22,8 @@
 
 #define Relais GPIO_PIN_12
 #define Direction GPIO_PIN_13
+#define ARBEITSPUNKT 1400
+
 
 
 
@@ -93,8 +96,7 @@ uint8_t crc_4bit;
 Gyro gyro;
 Kal_Init kal_init;
 Kal_Loop kal_loop;
-
-/* IMU Data */
+PID pid;
 
 uint8_t i2cData[14];
 
@@ -107,11 +109,16 @@ double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
 uint32_t timer;
 
 
+
 void maincpp()
 {
 	int i,k;
     char buffer[N_LEN];
     char msg_drehzahl[22] = "Drehzahl einstellen: ";
+
+
+
+     double Winkel, PIDOut, WinkelSetpoint;
 
 	uint8_t stellwert_l;
 	uint8_t stellwert_m;
@@ -269,7 +276,7 @@ void maincpp()
 		      		 {
 		      			// das geht hier leider nur "hardware-nah"
 
-		      			HAL_UART_Transmit(&huart5, (uint8_t *)&msg_drehzahl, 22, HAL_MAX_DELAY);
+		      		   HAL_UART_Transmit(&huart5, (uint8_t *)&msg_drehzahl, 22, HAL_MAX_DELAY);
 
 		      		   HAL_Delay(1000);
 
@@ -449,11 +456,15 @@ void maincpp()
 
 		      	 case '5':
 		      		std::cout << "Winkelsensor testen\r\n";
+
+// so, wie der Sensor jetzt montiert ist, ergibt eine Steigung über 0 hinaus negative Winkelwerte
+
 		      		 HAL_Delay(1000);
 		      		 abbruch_flag = 0;
+		      		std::cout << std::fixed;
 		      		 while(abbruch_flag == 0)
 		      		 {
-		      			 kal_loop.Kalman_Loop();
+		      			 std::cout << kal_loop.Kalman_Loop() << "\r\n";
 		      			 if(test == 0x20 || test == '7')
 		      				abbruch_flag = 1;
 		      		 }
@@ -463,33 +474,103 @@ void maincpp()
 		      	 break;
 
 		      	 case '6':
-		      		std::cout << "geregelter Betrieb\r\n";
-		      	    HAL_Delay(1000);
 
-//		      	  //PID input
-//		      	  	servo->uk[1] = servo->uk[0];
-//		      	  	servo->uk[0] = servo->error_sum;
-//		      	  	servo->uk_sum = servo->uk[1] / (sizeof(servo->uk)/sizeof(*(servo->uk)));
-//		      	  	servo->uk_sum += servo->uk[0] / (sizeof(servo->uk)/sizeof(*(servo->uk)));
-//
-//		      	  //Proportional gains
-//		      	  	servo->P = servo->kp * servo->uk[0];
-//		      	  // integral gain
-//		      	  	servo->I = servo->ki * servo->uk_sum;
-//		      	  	servo->I = (servo->I > 800) ? 800 : (servo->I < -800) ? -800 : servo->I; // saturate integral gain
-//		      	  	servo->ts = 0.04;
-//		      	  //Derivate gain
-//		      	  	servo->D = servo->kd * (servo->uk[0] - servo->uk[1]) / (servo->ts);
-//		      	  //PID
-//		      	  	servo->yk = servo->P + servo->I + servo->D; //PID
-//		      	  	servo->yk = (servo->yk < -1000) ? -1000 :
-//		      	  				(servo->yk > 1000) ? 1000 : servo->yk;
-//		      	   //saturate PID signal because our motor can work in between -1000 and 1000
-//
-//
+		      	    if(motor_dreht == 0)
+		      	    {
+		      		   std::cout << "geregelter Betrieb\r\n";
+		      	       HAL_Delay(1000);
 
 
-		      	    state = 0;
+		      	       std::cout << "Motor in den Arbeitspunkt fahren\r\n";
+		      	       HAL_GPIO_WritePin(GPIOG, Relais,GPIO_PIN_SET);  // Sicherungsrelais = EIN
+     	      		   NVIC_EnableIRQ(TIM1_CC_IRQn); // enable CC interrupt in NVIC
+		      	       for(int i = 0; i < ARBEITSPUNKT; i++)
+		      	       {
+		      	    	  if(test == 0x20 || test == '7')
+		      	          {
+		      	      	  	 abbruch_flag = 1;
+		      	      	 	 motor_dreht = 0;
+		      	      	 	 HAL_GPIO_WritePin(GPIOG, Relais,GPIO_PIN_RESET);  // Sicherungsrelais = AUS
+		      	      	 	 NVIC_DisableIRQ(TIM1_CC_IRQn); // disable CC interrupt in NVIC
+
+		      	      	  	 for(k = 0; k < 1;k++)                     // mehrfachausgabe Meldung verhindern
+		      	      	   	 {
+		      	      	   		 std::cout << "Abbruch durch Benutzer!\r\n";
+		      	      		     HAL_Delay(1000);
+		      	      		 }
+
+		      	      		 break;
+		      	          }
+
+
+		      	          stellwert_l = (uint32_t)i & 0x0f;
+		      	          stellwert_m = ((uint32_t)i >> 4) & 0x0f;
+		      	          stellwert_h = ((uint32_t)i >> 8) & 0x0f;
+
+      	      		      Impuls_Breite_1 = stellwert_h * Impuls_Delta;
+      	      		      Impuls_Breite_2 = stellwert_m * Impuls_Delta;
+      	      		      Impuls_Breite_3 = stellwert_l * Impuls_Delta;
+      	      		      HAL_Delay(10);
+      	      		   }
+
+
+
+		      	       std::cout << "Regler starten\r\n";
+		      	       Winkel = 0;
+		      	       WinkelSetpoint = 0;
+		      	       pid.Init(&Winkel, &PIDOut, &WinkelSetpoint, 0.3, 5, 0, _PID_P_ON_E, _PID_CD_DIRECT);
+
+		      	      pid.SetMode(_PID_MODE_AUTOMATIC);
+		      	      pid.SetSampleTime(50);
+		      	      pid.SetOutputLimits(-1000, 1000);
+
+// start controller every sample-time (later, measure it ...)
+
+				      abbruch_flag = 0;
+				  	  while(abbruch_flag == 0)
+				   	  {
+
+	// hole Istwert (Winkelstellung)
+				  		if(test == 0x20 || test == '7')
+				  		{
+				   			abbruch_flag = 1;
+				  		    motor_dreht = 0;
+				   	 	    HAL_GPIO_WritePin(GPIOG, Relais,GPIO_PIN_RESET);  // Sicherungsrelais = AUS
+				  	 	    NVIC_DisableIRQ(TIM1_CC_IRQn); // disable CC interrupt in NVIC
+				  	 	    for(k = 0; k < 1;k++)                     // mehrfachausgabe Meldung verhindern
+				  	 	 	{
+				  	 	 	   std::cout << "Abbruch durch Benutzer!\r\n";
+				  	 	 	   HAL_Delay(1000);
+				  	 	 	}
+				  		}
+				  		Winkel = kal_loop.Kalman_Loop();     // Istwert holen
+
+				  		pid.Compute();
+
+				  		std::cout << "Reglerausgang: " <<  PIDOut << "\r\n";
+
+				  		drehzahl = (ARBEITSPUNKT - (int16_t) PIDOut);
+
+				  		std::cout << "Drehzahl als Regelgroesse: " << drehzahl  << "\r\n";
+
+
+				  		 stellwert_l = (uint32_t)drehzahl & 0x0f;
+				  		 stellwert_m = ((uint32_t)drehzahl >> 4) & 0x0f;
+				  		 stellwert_h = ((uint32_t)drehzahl >> 8) & 0x0f;
+	      	       	     Impuls_Breite_1 = stellwert_h * Impuls_Delta;
+				  		 Impuls_Breite_2 = stellwert_m * Impuls_Delta;
+				  		 Impuls_Breite_3 = stellwert_l * Impuls_Delta;
+
+	      	         }
+
+		      	  }
+				  else
+				 {
+				  	std::cout << "Vor Reglerstart Motor anhalten\r\n";
+				  	HAL_Delay(1000);
+				  }
+
+		      	  state = 0;
 
 		      	 break;
 
