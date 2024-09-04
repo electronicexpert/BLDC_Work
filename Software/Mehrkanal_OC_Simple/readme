@@ -1,1 +1,15 @@
+This is a test-example for runing 4 different BLDC motors via PROSHOT, using one timer. 
+Hardware mapped this way:
+M1 Proshot Signal  PG 14
+M2 Proshot Signal  PG 13
+M3 Proshot Signal  PG 12
+M4 Proshot Signal  PG 11
+M1 Direction       PG 10
+M2 Direction       PG  9         
+M3 Direction       PD  7
+M4 Direction       PD  6
+
+Safety-Relais      PB  3
+
+Motors are running 200,400,600,800 for 10s.
 
